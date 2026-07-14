@@ -72,13 +72,14 @@ LINE_STYLE_MAP = {
 
 
 class Phasor:
-    """Single phasor: magnitude, angle (degrees), colour, label, line style."""
+    """Single phasor: magnitude, angle (degrees), colour, label, line style, quantity type, visual scale."""
 
     _counter = 0
 
     def __init__(self, magnitude: float, angle_deg: float,
                  color: str = None, label: str = None,
-                 line_style: str = "Solid", start_from: int | None = None):
+                 line_style: str = "Solid", start_from: int | None = None,
+                 quantity_type: str = "Voltage (E)", visual_scale: float = 1.0):
         Phasor._counter += 1
         self.id = Phasor._counter
         self.magnitude = magnitude
@@ -87,6 +88,8 @@ class Phasor:
         self.label = label or f"E{self.id}"
         self.line_style = line_style if line_style in LINE_STYLES else "Solid"
         self.start_from: int | None = start_from  # None = origin, else phasor ID
+        self.quantity_type = quantity_type  # "Voltage (E)" or "Current (I)"
+        self.visual_scale = max(1e-6, float(visual_scale))
 
     @property
     def angle_rad(self):
@@ -101,15 +104,29 @@ class Phasor:
         return self.magnitude * math.sin(self.angle_rad)
 
     @property
+    def draw_mag(self):
+        return self.magnitude * self.visual_scale
+
+    @property
+    def draw_x(self):
+        return self.draw_mag * math.cos(self.angle_rad)
+
+    @property
+    def draw_y(self):
+        return self.draw_mag * math.sin(self.angle_rad)
+
+    @property
     def mpl_linestyle(self):
         return LINE_STYLE_MAP.get(self.line_style, "-")
 
     def polar_str(self):
-        return f"{self.magnitude:.2f} ∠ {self.angle_deg:.1f}°"
+        unit = "A" if "Current" in self.quantity_type else "V"
+        return f"{self.magnitude:.2f} {unit} ∠ {self.angle_deg:.1f}°"
 
     def rect_str(self):
         sign = "+" if self.y >= 0 else "−"
-        return f"{self.x:.2f} {sign} j{abs(self.y):.2f}"
+        unit = "A" if "Current" in self.quantity_type else "V"
+        return f"{self.x:.2f} {sign} j{abs(self.y):.2f} {unit}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -331,35 +348,73 @@ class PhasorDiagramApp:
         fields = tk.Frame(input_frame, bg=BG_TERTIARY)
         fields.pack(fill=tk.X)
 
-        # Row 0 — Label
-        tk.Label(fields, text="Label:", bg=BG_TERTIARY, fg=TEXT_DIM,
+        # Row 0 — Quantity Type
+        tk.Label(fields, text="Quantity:", bg=BG_TERTIARY, fg=TEXT_DIM,
                  font=("Segoe UI", 9), anchor="w").grid(
             row=0, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
-        self.entry_label = self._entry(fields, width=22)
-        self.entry_label.grid(row=0, column=1, sticky="ew", pady=(0, 6))
-        self.entry_label.insert(0, f"E{Phasor._counter + 1}")
+        self.quantity_type_var = tk.StringVar(value="Voltage (E)")
+        qty_frame = tk.Frame(fields, bg=BG_TERTIARY)
+        qty_frame.grid(row=0, column=1, sticky="w", pady=(0, 6))
+        for qt in ["Voltage (E)", "Current (I)"]:
+            tk.Radiobutton(
+                qty_frame, text=qt, variable=self.quantity_type_var, value=qt,
+                bg=BG_TERTIARY, fg=TEXT_WHITE, selectcolor=BG_INPUT,
+                activebackground=BG_TERTIARY, activeforeground=TEXT_WHITE,
+                font=("Segoe UI", 8), indicatoron=1, bd=0,
+                highlightthickness=0, command=self._on_qty_type_change
+            ).pack(side=tk.LEFT, padx=(0, 8))
 
-        # Row 1 — Magnitude
-        tk.Label(fields, text="Magnitude:", bg=BG_TERTIARY, fg=TEXT_DIM,
+        # Row 1 — Label
+        tk.Label(fields, text="Label:", bg=BG_TERTIARY, fg=TEXT_DIM,
                  font=("Segoe UI", 9), anchor="w").grid(
             row=1, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
-        self.entry_mag = self._entry(fields, width=22)
-        self.entry_mag.grid(row=1, column=1, sticky="ew", pady=(0, 6))
+        self.entry_label = self._entry(fields, width=22)
+        self.entry_label.grid(row=1, column=1, sticky="ew", pady=(0, 6))
+        self.entry_label.insert(0, f"E{Phasor._counter + 1}")
 
-        # Row 2 — Angle
-        tk.Label(fields, text="Angle (deg):", bg=BG_TERTIARY, fg=TEXT_DIM,
+        # Row 2 — Magnitude (True Physical Value)
+        tk.Label(fields, text="Magnitude:", bg=BG_TERTIARY, fg=TEXT_DIM,
                  font=("Segoe UI", 9), anchor="w").grid(
             row=2, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
-        self.entry_angle = self._entry(fields, width=22)
-        self.entry_angle.grid(row=2, column=1, sticky="ew", pady=(0, 6))
+        self.entry_mag = self._entry(fields, width=22)
+        self.entry_mag.grid(row=2, column=1, sticky="ew", pady=(0, 6))
 
-        # Row 3 — Line Style
-        tk.Label(fields, text="Line Style:", bg=BG_TERTIARY, fg=TEXT_DIM,
+        # Row 3 — Angle
+        tk.Label(fields, text="Angle (deg):", bg=BG_TERTIARY, fg=TEXT_DIM,
                  font=("Segoe UI", 9), anchor="w").grid(
             row=3, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
+        self.entry_angle = self._entry(fields, width=22)
+        self.entry_angle.grid(row=3, column=1, sticky="ew", pady=(0, 6))
+
+        # Row 4 — Visual Scale (×)
+        tk.Label(fields, text="Draw Scale (×):", bg=BG_TERTIARY, fg=TEXT_DIM,
+                 font=("Segoe UI", 9), anchor="w").grid(
+            row=4, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
+        scale_frame = tk.Frame(fields, bg=BG_TERTIARY)
+        scale_frame.grid(row=4, column=1, sticky="ew", pady=(0, 6))
+        self.entry_scale = self._entry(scale_frame, width=8)
+        self.entry_scale.pack(side=tk.LEFT, padx=(0, 6))
+        self.entry_scale.insert(0, "1.0")
+        for val_str in ["1×", "10×", "20×", "Auto"]:
+            def _set_scale(v=val_str):
+                if v == "Auto":
+                    self._auto_scale_current()
+                else:
+                    self.entry_scale.delete(0, tk.END)
+                    self.entry_scale.insert(0, v.replace("×", ".0"))
+            btn = tk.Button(
+                scale_frame, text=val_str, bg=BG_INPUT, fg=TEXT_WHITE,
+                font=("Segoe UI", 7), relief="flat", bd=0, padx=4, pady=1,
+                cursor="hand2", command=_set_scale)
+            btn.pack(side=tk.LEFT, padx=2)
+
+        # Row 5 — Line Style
+        tk.Label(fields, text="Line Style:", bg=BG_TERTIARY, fg=TEXT_DIM,
+                 font=("Segoe UI", 9), anchor="w").grid(
+            row=5, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
         self.line_style_var = tk.StringVar(value="Solid")
         style_frame = tk.Frame(fields, bg=BG_TERTIARY)
-        style_frame.grid(row=3, column=1, sticky="w", pady=(0, 6))
+        style_frame.grid(row=5, column=1, sticky="w", pady=(0, 6))
         for ls in LINE_STYLES:
             tk.Radiobutton(
                 style_frame, text=ls, variable=self.line_style_var, value=ls,
@@ -369,21 +424,21 @@ class PhasorDiagramApp:
                 highlightthickness=0
             ).pack(side=tk.LEFT, padx=(0, 8))
 
-        # Row 4 — Start From
+        # Row 6 — Start From
         tk.Label(fields, text="Start From:", bg=BG_TERTIARY, fg=TEXT_DIM,
                  font=("Segoe UI", 9), anchor="w").grid(
-            row=4, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
+            row=6, column=0, sticky="w", padx=(0, 10), pady=(0, 6))
         self.start_from_var = tk.StringVar(value="Origin")
         self.start_from_frame = tk.Frame(fields, bg=BG_TERTIARY)
-        self.start_from_frame.grid(row=4, column=1, sticky="ew", pady=(0, 6))
+        self.start_from_frame.grid(row=6, column=1, sticky="ew", pady=(0, 6))
         self._rebuild_start_from_dropdown()
 
-        # Row 5 — Colour
+        # Row 7 — Colour
         tk.Label(fields, text="Colour:", bg=BG_TERTIARY, fg=TEXT_DIM,
                  font=("Segoe UI", 9), anchor="w").grid(
-            row=5, column=0, sticky="w", padx=(0, 10), pady=(0, 4))
+            row=7, column=0, sticky="w", padx=(0, 10), pady=(0, 4))
         color_frame = tk.Frame(fields, bg=BG_TERTIARY)
-        color_frame.grid(row=5, column=1, sticky="w", pady=(0, 4))
+        color_frame.grid(row=7, column=1, sticky="w", pady=(0, 4))
 
         self.new_color = PHASOR_COLORS[Phasor._counter % len(PHASOR_COLORS)]
         self.color_swatch = tk.Canvas(
@@ -409,14 +464,13 @@ class PhasorDiagramApp:
 
         # ── Keyboard navigation ──
         # Ordered list of input fields for arrow-key cycling
-        self._input_fields = [self.entry_label, self.entry_mag, self.entry_angle]
+        self._input_fields = [self.entry_label, self.entry_mag, self.entry_angle, self.entry_scale]
 
         for idx, field in enumerate(self._input_fields):
-            field.bind("<Down>", lambda e, i=idx: self._focus_field((i + 1) % 3))
-            field.bind("<Up>",   lambda e, i=idx: self._focus_field((i - 1) % 3))
+            field.bind("<Down>", lambda e, i=idx: self._focus_field((i + 1) % 4))
+            field.bind("<Up>",   lambda e, i=idx: self._focus_field((i - 1) % 4))
             field.bind("<Return>", lambda e: self._add_phasor())
-            # Tab already moves forward natively; bind Shift-Tab for reverse
-            field.bind("<Shift-Tab>", lambda e, i=idx: self._focus_field((i - 1) % 3))
+            field.bind("<Shift-Tab>", lambda e, i=idx: self._focus_field((i - 1) % 4))
 
         # ── Section: Phasor Table ──
         self._heading(p, "PHASOR TABLE")
@@ -557,6 +611,38 @@ class PhasorDiagramApp:
                 return f"Tip of {p.label}"
         return "Origin"
 
+    def _on_qty_type_change(self):
+        qt = self.quantity_type_var.get()
+        lbl = self.entry_label.get().strip()
+        if "Current" in qt:
+            if lbl.startswith("E") and lbl[1:].isdigit():
+                self.entry_label.delete(0, tk.END)
+                self.entry_label.insert(0, f"I{lbl[1:]}")
+            if self.entry_scale.get().strip() == "1.0":
+                self._auto_scale_current()
+        else:
+            if lbl.startswith("I") and lbl[1:].isdigit():
+                self.entry_label.delete(0, tk.END)
+                self.entry_label.insert(0, f"E{lbl[1:]}")
+            self.entry_scale.delete(0, tk.END)
+            self.entry_scale.insert(0, "1.0")
+
+    def _auto_scale_current(self):
+        """Compute an automatic visual scale so current arrows match voltage proportions."""
+        max_v = max([p.draw_mag for p in self.phasors if "Voltage" in p.quantity_type], default=100.0)
+        try:
+            val = float(self.entry_mag.get().strip())
+            if val > 0:
+                scale = round(max_v * 0.75 / val, 1)
+                if scale < 1.0:
+                    scale = 1.0
+            else:
+                scale = 20.0
+        except ValueError:
+            scale = 20.0
+        self.entry_scale.delete(0, tk.END)
+        self.entry_scale.insert(0, str(scale))
+
     # ─────────────────────── Phasor CRUD ───────────────────────
     def _add_phasor(self):
         # Validate magnitude
@@ -586,6 +672,13 @@ class PhasorDiagramApp:
         label = self.entry_label.get().strip() or None
         line_style = self.line_style_var.get()
         start_from_id = self._start_from_var_to_id()
+        qty_type = self.quantity_type_var.get()
+        try:
+            scale = float(self.entry_scale.get().strip())
+            if scale <= 0:
+                scale = 1.0
+        except ValueError:
+            scale = 1.0
 
         if self._editing_id is not None:
             # ── Update existing phasor ──
@@ -596,6 +689,8 @@ class PhasorDiagramApp:
                     p.color = self.new_color
                     p.line_style = line_style
                     p.start_from = start_from_id
+                    p.quantity_type = qty_type
+                    p.visual_scale = scale
                     if label:
                         p.label = label
                     self._update_status(f"Updated phasor '{p.label}'")
@@ -605,13 +700,17 @@ class PhasorDiagramApp:
         else:
             # ── Add new phasor ──
             p = Phasor(mag, angle, color=self.new_color, label=label,
-                       line_style=line_style, start_from=start_from_id)
+                       line_style=line_style, start_from=start_from_id,
+                       quantity_type=qty_type, visual_scale=scale)
             self.phasors.append(p)
             self._update_status(f"Added phasor '{p.label}'")
 
         # Reset inputs
         self.entry_mag.delete(0, tk.END)
         self.entry_angle.delete(0, tk.END)
+        self.entry_scale.delete(0, tk.END)
+        self.entry_scale.insert(0, "1.0")
+        self.quantity_type_var.set("Voltage (E)")
         self.entry_label.delete(0, tk.END)
         self.entry_label.insert(0, f"E{Phasor._counter + 1}")
         self.line_style_var.set("Solid")
@@ -638,12 +737,15 @@ class PhasorDiagramApp:
         self._editing_id = phasor_id
 
         # Populate fields with selected phasor's values
+        self.quantity_type_var.set(target.quantity_type)
         self.entry_label.delete(0, tk.END)
         self.entry_label.insert(0, target.label)
         self.entry_mag.delete(0, tk.END)
         self.entry_mag.insert(0, str(target.magnitude))
         self.entry_angle.delete(0, tk.END)
         self.entry_angle.insert(0, str(target.angle_deg))
+        self.entry_scale.delete(0, tk.END)
+        self.entry_scale.insert(0, f"{target.visual_scale:g}")
         self.line_style_var.set(target.line_style)
         self._rebuild_start_from_dropdown()
         self.start_from_var.set(self._id_to_start_from_var(target.start_from))
@@ -664,6 +766,9 @@ class PhasorDiagramApp:
         self.add_btn.configure(text="Add Phasor")
         self.entry_mag.delete(0, tk.END)
         self.entry_angle.delete(0, tk.END)
+        self.entry_scale.delete(0, tk.END)
+        self.entry_scale.insert(0, "1.0")
+        self.quantity_type_var.set("Voltage (E)")
         self.entry_label.delete(0, tk.END)
         self.entry_label.insert(0, f"E{Phasor._counter + 1}")
         self.line_style_var.set("Solid")
@@ -711,7 +816,7 @@ class PhasorDiagramApp:
         # Table header
         hdr = tk.Frame(self.table_frame, bg=BG_TERTIARY)
         hdr.pack(fill=tk.X)
-        for col, w in [("", 4), ("Label", 6), ("Polar", 13), ("Rectangular", 14), ("", 3)]:
+        for col, w in [("", 3), ("Label", 5), ("Value", 14), ("Scale", 6), ("From", 4), ("", 3)]:
             tk.Label(hdr, text=col, bg=BG_TERTIARY, fg=TEXT_MUTED,
                      font=("Segoe UI", 8, "bold"), width=w,
                      anchor="w").pack(side=tk.LEFT, padx=2, pady=(4, 2))
@@ -730,7 +835,7 @@ class PhasorDiagramApp:
             # Colour swatch
             swatch = tk.Canvas(row, width=14, height=14, bg=p.color,
                               highlightthickness=1, highlightbackground=BORDER)
-            swatch.pack(side=tk.LEFT, padx=(8, 4), pady=4)
+            swatch.pack(side=tk.LEFT, padx=(6, 3), pady=4)
 
             # Selection indicator
             if is_selected:
@@ -740,13 +845,20 @@ class PhasorDiagramApp:
             # Label
             lbl = tk.Label(row, text=p.label, bg=row_bg, fg=TEXT_WHITE,
                      font=("Segoe UI", 9, "bold" if is_selected else "normal"),
-                     width=6, anchor="w")
+                     width=5, anchor="w")
             lbl.pack(side=tk.LEFT, padx=2, pady=2)
 
-            # Polar
+            # Polar value
             polar_lbl = tk.Label(row, text=p.polar_str(), bg=row_bg, fg=TEXT_WHITE,
-                     font=("Consolas", 8), width=13, anchor="w")
+                     font=("Consolas", 8), width=14, anchor="w")
             polar_lbl.pack(side=tk.LEFT, padx=2, pady=2)
+
+            # Scale badge
+            scale_lbl = tk.Label(row, text=f"×{p.visual_scale:g}", bg=row_bg,
+                     fg=ACCENT_BLUE if abs(p.visual_scale - 1.0) > 1e-3 else TEXT_MUTED,
+                     font=("Consolas", 8, "bold" if abs(p.visual_scale - 1.0) > 1e-3 else "normal"),
+                     width=6, anchor="w")
+            scale_lbl.pack(side=tk.LEFT, padx=2, pady=2)
 
             # Start-from indicator
             if p.start_from is not None:
@@ -786,6 +898,7 @@ class PhasorDiagramApp:
             _bind_click(swatch)
             _bind_click(lbl)
             _bind_click(polar_lbl)
+            _bind_click(scale_lbl)
             _bind_click(from_lbl)
             _bind_click(style_lbl)
 
@@ -917,8 +1030,8 @@ class PhasorDiagramApp:
                 break  # referenced phasor deleted
             # Origin of source + source's own displacement = tip of source
             src_ox, src_oy = self._compute_phasor_origin(source)
-            ox = src_ox + source.x
-            oy = src_oy + source.y
+            ox = src_ox + source.draw_x
+            oy = src_oy + source.draw_y
             break  # only one level of reference needed per call
         return (ox, oy)
 
@@ -932,19 +1045,19 @@ class PhasorDiagramApp:
             self.canvas_mpl.draw()
             return
 
-        # Compute per-phasor origins and tips
+        # Compute per-phasor origins and tips using visual drawing coordinates
         origins = []
         tips = []
         for p in self.phasors:
             ox, oy = self._compute_phasor_origin(p)
             origins.append((ox, oy))
-            tips.append((ox + p.x, oy + p.y))
+            tips.append((ox + p.draw_x, oy + p.draw_y))
 
         # Determine axis limits from all origins and tips
         all_x = [o[0] for o in origins] + [t[0] for t in tips] + [0]
         all_y = [o[1] for o in origins] + [t[1] for t in tips] + [0]
         max_extent = max(max(abs(v) for v in all_x), max(abs(v) for v in all_y))
-        max_mag = max(p.magnitude for p in self.phasors)
+        max_mag = max(p.draw_mag for p in self.phasors)
         margin = max(max_extent, max_mag) * 0.35
         limit = max(max_extent, max_mag) + margin
 
@@ -1004,6 +1117,20 @@ class PhasorDiagramApp:
             tx, ty = tips[idx]
             lbl_pos = label_positions[idx] if self.show_labels.get() else None
             self._draw_phasor(p, ox, oy, tx, ty, max_mag, limit, lbl_pos, show_comp)
+
+        # Draw scale note if any phasor has a custom visual scale
+        has_scaled = any(abs(p.visual_scale - 1.0) > 1e-3 for p in self.phasors)
+        if has_scaled:
+            note_lines = ["Scale Note:"]
+            for p in self.phasors:
+                if abs(p.visual_scale - 1.0) > 1e-3:
+                    note_lines.append(f"• {p.label}: drawn ×{p.visual_scale:g} ({p.polar_str()})")
+            self.ax.text(
+                -limit * 0.94, limit * 0.94, "\n".join(note_lines),
+                ha="left", va="top", fontsize=6.5, color=self.diagram_axis,
+                bbox=dict(facecolor=self.diagram_bg, edgecolor=self.diagram_grid,
+                          alpha=0.85, boxstyle="round,pad=0.3", linewidth=0.6),
+                zorder=15)
 
         # Clean up frame
         for spine in self.ax.spines.values():
@@ -1112,6 +1239,8 @@ class PhasorDiagramApp:
             label_text = p.label
             if show_comp:
                 label_text += f"\n{p.polar_str()}"
+            if abs(p.visual_scale - 1.0) > 1e-3:
+                label_text += f"\n(drawn ×{p.visual_scale:g})"
 
             self.ax.text(
                 lx, ly, label_text, ha="center", va="center",
@@ -1132,7 +1261,7 @@ class PhasorDiagramApp:
 
         # Angle arc (drawn at the origin of this phasor)
         if self.show_angle_arcs.get():
-            arc_r = min(p.magnitude * 0.22, max_mag * 0.12)
+            arc_r = min(p.draw_mag * 0.22, max_mag * 0.12)
             theta = np.linspace(0, p.angle_rad, 50)
             self.ax.plot(
                 ox + arc_r * np.cos(theta), oy + arc_r * np.sin(theta),
